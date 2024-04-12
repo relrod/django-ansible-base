@@ -45,3 +45,7 @@ tools/generated/*
 
 # Gets created when testing sonar-scanner locally
 .scannerwork
+
+# Docs build stuff
+sphinxdocs/_build
+sphinxdocs/source/ansible_base\.*

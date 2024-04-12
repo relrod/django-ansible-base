@@ -13,3 +13,6 @@ pytest-django
 setuptools-scm
 psycopg[binary]
 sdb
+sphinx
+sphinx-rtd-theme
+sphinx-autodoc-typehints

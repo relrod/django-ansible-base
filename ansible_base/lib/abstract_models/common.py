@@ -37,14 +37,20 @@ def get_url_for_object(obj, request=None):
 
 
 class ModifiableModel(models.Model):
+    """
+    An abstract base model for tracking the last modification of a resource.
+    """
+
     class Meta:
         abstract = True
 
+    #: The date/time this resource was last modified
     modified = models.DateTimeField(
         editable=False,
         help_text="The date/time this resource was created",
         auto_now=True,
     )
+    #: A reference to the user who last modified this resource
     modified_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         related_name='%(app_label)s_%(class)s_modified+',
@@ -73,14 +79,20 @@ class ModifiableModel(models.Model):
 
 
 class CreatableModel(models.Model):
+    """
+    An abstract base model for tracking the creation of a resource.
+    """
+
     class Meta:
         abstract = True
 
+    #: The date/time this resource was created
     created = models.DateTimeField(
         editable=False,
         help_text="The date/time this resource was created",
         auto_now_add=True,
     )
+    #: A reference to the user who created this resource
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         related_name='%(app_label)s_%(class)s_created+',
@@ -105,6 +117,12 @@ class CreatableModel(models.Model):
 
 
 class AbstractCommonModel(models.Model):
+    """
+    A base model that does the following:
+    - Automatically handles encryption/decryption of fields marked as encrypted
+    - Automatically handles dealing with ``summary_fields`` and ``related_fields``
+    """
+
     # Any field marked as encrypted will automatically be stored in an encrypted fashion
     encrypted_fields = []
     # Any field set in here will not be used in the views
@@ -202,9 +220,14 @@ class CommonModel(AbstractCommonModel, CreatableModel, ModifiableModel):
 
 
 class NamedCommonModel(CommonModel):
+    """
+    A base model for resources that have a name.
+    """
+
     class Meta:
         abstract = True
 
+    #: The name of this resource
     name = models.CharField(
         max_length=512,
         help_text="The name of this resource",
@@ -220,9 +243,14 @@ class NamedCommonModel(CommonModel):
 
 
 class UniqueNamedCommonModel(CommonModel):
+    """
+    A base model for resources that have a unique name.
+    """
+
     class Meta:
         abstract = True
 
+    #: The unique name of this resource
     name = models.CharField(
         max_length=512,
         unique=True,
