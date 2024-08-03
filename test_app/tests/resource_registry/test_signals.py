@@ -50,7 +50,19 @@ def test_registered_model_triggers_signals(model, system_user):
 class TestReverseResourceSync:
     @pytest.fixture(autouse=True)
     def setup(self, request, settings):
+        # This is kind of a dance. We don't want to break other tests by
+        # leaving the save method monkeypatched when they are expecting syncing
+        # to be disabled. So we patch the save method, yield, reset
+        # DISABLE_RESOURCE_SERVER_SYNC, undo the patch (disconnect_resource_signals),
+        # and then reconnect signals (so the resource registry stuff still works) but
+        # this time we don't monkeypatch the save method since DISABLE_RESOURCE_SERVER_SYNC
+        # is back to its original value.
+        is_disabled = settings.DISABLE_RESOURCE_SERVER_SYNC
         settings.DISABLE_RESOURCE_SERVER_SYNC = False
+        apps.connect_resource_signals(sender=None)
+        yield
+        apps.disconnect_resource_signals(sender=None)
+        settings.DISABLE_RESOURCE_SERVER_SYNC = is_disabled
         apps.connect_resource_signals(sender=None)
 
     @pytest.mark.django_db

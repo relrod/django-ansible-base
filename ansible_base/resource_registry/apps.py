@@ -116,10 +116,10 @@ def connect_resource_signals(sender, **kwargs):
 
             if _should_reverse_sync():
                 # Wrap save() in a transaction and sync to resource server
-                _original_save = cls.save
+                cls._original_save = cls.save
 
                 # Avoid late binding issues
-                def save(self, *args, _original_save=_original_save, **kwargs):
+                def save(self, *args, _original_save=cls._original_save, **kwargs):
                     with transaction.atomic():
                         # We need to know if this is a new object before we save it
                         action = "create" if self._state.adding else "update"
@@ -131,10 +131,10 @@ def connect_resource_signals(sender, **kwargs):
                 cls.save = save
 
                 # Wrap delete() in a transaction and remove from resource server
-                _original_delete = cls.delete
+                cls._original_delete = cls.delete
 
                 # Avoid late binding issues
-                def delete(self, *args, _original_delete=_original_delete, **kwargs):
+                def delete(self, *args, _original_delete=cls._original_delete, **kwargs):
                     with transaction.atomic():
                         _original_delete(self, *args, **kwargs)
                         handlers.sync_to_resource_server(self, "delete")
@@ -149,6 +149,14 @@ def disconnect_resource_signals(sender, **kwargs):
         for cls in [model, *proxies_of_model(model)]:
             signals.post_save.disconnect(handlers.update_resource, sender=cls)
             signals.post_delete.disconnect(handlers.remove_resource, sender=cls)
+
+            if hasattr(cls, '_original_save'):
+                cls.save = cls._original_save
+                del cls._original_save
+
+            if hasattr(cls, '_original_delete'):
+                cls.delete = cls._original_delete
+                del cls._original_delete
 
 
 class ResourceRegistryConfig(AppConfig):
