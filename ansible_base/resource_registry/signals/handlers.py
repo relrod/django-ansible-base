@@ -5,6 +5,8 @@ from functools import lru_cache
 from crum import get_current_user
 from django.conf import settings
 from django.db import transaction
+from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
 
 from ansible_base.resource_registry.models import Resource, init_resource_from_object
 from ansible_base.resource_registry.registry import get_registry
@@ -118,7 +120,7 @@ def sync_to_resource_server(action, instance):
         client = get_resource_server_client(
             settings.RESOURCE_SERVICE_PATH,
             jwt_user_id=user_ansible_id,
-            raise_if_bad_request=True,  # TODO: Do we really want to rollback on sync fail?
+            raise_if_bad_request=True,
         )
 
         ansible_id = instance.resource.ansible_id
@@ -139,14 +141,14 @@ def sync_to_resource_server(action, instance):
                 response = client.update_resource(ansible_id, body)
         elif action == 'delete':
             response = client.delete_resource(ansible_id)
-
-        logger.debug("Resource server response: %s", response)
     except Exception as e:
         logger.exception("Failed to sync resource to resource server")
+
         if hasattr(instance, '_transaction'):
             exc = True
             if not instance._transaction.__exit__(*sys.exc_info()):
-                raise
+                msg = _("Failed to sync resource to resource server")
+                raise ValidationError(msg) from e
     finally:
         if hasattr(instance, '_transaction'):
             if not exc:
