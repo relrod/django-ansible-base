@@ -3,7 +3,7 @@ from unittest import mock
 import pytest
 from crum import impersonate
 from django.contrib.auth.models import AnonymousUser
-from django.db import connection
+from django.db import connection, IntegrityError
 from django.test.utils import CaptureQueriesContext
 from rest_framework.exceptions import ValidationError
 
@@ -140,7 +140,7 @@ def test_sync_to_resource_server_no_resource(settings, user, nullify_resource):
 
 
 @pytest.mark.django_db
-def test_sync_to_resource_server_exception(settings, user):
+def test_sync_to_resource_server_exception_during_sync(settings, user):
     """
     We get an exception when trying to sync (e.g. the server gives us a 500, or
     we can't connect, etc.). We raise ValidationError and don't commit the change.
@@ -153,6 +153,27 @@ def test_sync_to_resource_server_exception(settings, user):
             with CaptureQueriesContext(connection) as queries:
                 with pytest.raises(ValidationError, match="Failed to sync resource"):
                     org = Organization.objects.create(name='Hello')
+
+    # The last two queries should be a rollback
+    assert queries.captured_queries[-2]['sql'].startswith('ROLLBACK'), queries.captured_queries[-2]['sql']
+    assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
+
+
+@pytest.mark.django_db
+@pytest.mark.xfail(reason="post_save never gets called in this case, so the transaction is never closed")
+def test_sync_to_resource_server_exception_during_save(settings, user, organization):
+    """
+    If we get an exception during .save(), the transaction should still roll back
+    and nothing should get synced to the resource server.
+    """
+    settings.DISABLE_RESOURCE_SERVER_SYNC = False
+
+    with mock.patch(f'{handlers_path}.get_resource_server_client') as get_resource_server_client:
+        with impersonate(user):
+            with CaptureQueriesContext(connection) as queries:
+                with pytest.raises(IntegrityError):
+                    org = Organization(name=organization.name)
+                    org.save()
 
     # The last two queries should be a rollback
     assert queries.captured_queries[-2]['sql'].startswith('ROLLBACK'), queries.captured_queries[-2]['sql']
