@@ -1,6 +1,8 @@
 import logging
 
 from django.apps import AppConfig
+from django.conf import settings
+from django.db import transaction
 from django.db.models import TextField, signals
 from django.db.models.functions import Cast
 from django.db.utils import IntegrityError
@@ -93,6 +95,15 @@ def proxies_of_model(cls):
             yield sub_cls
 
 
+def _should_reverse_sync():
+    enabled = not getattr(settings, 'DISABLE_RESOURCE_SERVER_SYNC', False)
+    for setting in ('RESOURCE_SERVER', 'RESOURCE_SERVICE_PATH'):
+        if not getattr(settings, setting, False):
+            enabled = False
+            break
+    return enabled
+
+
 def connect_resource_signals(sender, **kwargs):
     from ansible_base.resource_registry.signals import handlers
 
@@ -103,13 +114,32 @@ def connect_resource_signals(sender, **kwargs):
             signals.post_save.connect(handlers.update_resource, sender=cls)
             signals.post_delete.connect(handlers.remove_resource, sender=cls)
 
-            # Handle sending updates to the resource server (in a transaction) on save
-            # It's easier to test if we always connect these. We check in the receivers
-            # if we should actually do anything.
-            signals.pre_save.connect(handlers.sync_to_resource_server_pre_save, sender=cls)
-            signals.post_save.connect(handlers.sync_to_resource_server_post_save, sender=cls)
-            signals.pre_delete.connect(handlers.sync_to_resource_server_pre_delete, sender=cls)
-            signals.post_delete.connect(handlers.sync_to_resource_server_post_delete, sender=cls)
+            if _should_reverse_sync():
+                # Wrap save() in a transaction and sync to resource server
+                _original_save = cls.save
+
+                # Avoid late binding issues
+                def save(self, *args, _original_save=_original_save, **kwargs):
+                    with transaction.atomic():
+                        # We need to know if this is a new object before we save it
+                        action = "create" if self._state.adding else "update"
+                        # Save so we get an ansible_id if it's a new object
+                        _original_save(self, *args, **kwargs)
+                        # Send the object to the resource server
+                        handlers.sync_to_resource_server(self, action)
+
+                cls.save = save
+
+                # Wrap delete() in a transaction and remove from resource server
+                _original_delete = cls.delete
+
+                # Avoid late binding issues
+                def delete(self, *args, _original_delete=_original_delete, **kwargs):
+                    with transaction.atomic():
+                        _original_delete(self, *args, **kwargs)
+                        handlers.sync_to_resource_server(self, "delete")
+
+                cls.delete = delete
 
 
 def disconnect_resource_signals(sender, **kwargs):
@@ -119,12 +149,6 @@ def disconnect_resource_signals(sender, **kwargs):
         for cls in [model, *proxies_of_model(model)]:
             signals.post_save.disconnect(handlers.update_resource, sender=cls)
             signals.post_delete.disconnect(handlers.remove_resource, sender=cls)
-
-            # resource server sync signals
-            signals.pre_save.disconnect(handlers.sync_to_resource_server_pre_save, sender=cls)
-            signals.post_save.disconnect(handlers.sync_to_resource_server_post_save, sender=cls)
-            signals.pre_delete.disconnect(handlers.sync_to_resource_server_pre_delete, sender=cls)
-            signals.post_delete.disconnect(handlers.sync_to_resource_server_post_delete, sender=cls)
 
 
 class ResourceRegistryConfig(AppConfig):
