@@ -5,6 +5,7 @@ from crum import impersonate
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from rest_framework.exceptions import ValidationError
 
 from ansible_base.resource_registry.signals import handlers
 from test_app.models import EncryptionModel, Organization, Original1, Original2, Proxy1, Proxy2
@@ -69,7 +70,7 @@ def test_sync_to_resource_server_happy_path(settings, user, action):
 
     with mock.patch(f'{handlers_path}.get_resource_server_client') as get_resource_server_client:
         with impersonate(user):
-            with CaptureQueriesContext(connection) as ctx:
+            with CaptureQueriesContext(connection) as queries:
                 if action == 'create':
                     org = Organization.objects.create(name='Hello')
                 elif action == 'update':
@@ -84,16 +85,16 @@ def test_sync_to_resource_server_happy_path(settings, user, action):
 
     # The whole thing is wrapped in a transaction/savepoint
     if action in ('create', 'update'):
-        assert ctx.captured_queries[0]['sql'].startswith('SAVEPOINT'), ctx.captured_queries[0]['sql']
+        assert queries.captured_queries[0]['sql'].startswith('SAVEPOINT'), queries.captured_queries[0]['sql']
     else:
         # For delete there are a bunch of selects before the savepoint
         # So find the savepoint and ensure it's the right one (right before the delete)
-        for i, query in enumerate(ctx.captured_queries):
+        for i, query in enumerate(queries.captured_queries):
             if query['sql'].startswith('SAVEPOINT'):
                 break
-        assert ctx.captured_queries[i + 1]['sql'].startswith('DELETE'), ctx.captured_queries[i + 1]['sql']
+        assert queries.captured_queries[i + 1]['sql'].startswith('DELETE'), queries.captured_queries[i + 1]['sql']
 
-    assert ctx.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), ctx.captured_queries[-1]['sql']
+    assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
 
 
 @pytest.mark.django_db
@@ -136,3 +137,42 @@ def test_sync_to_resource_server_no_resource(settings, user, nullify_resource):
 
     # We bail out if we don't have a resource
     get_resource_server_client.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_sync_to_resource_server_exception(settings, user):
+    """
+    We get an exception when trying to sync (e.g. the server gives us a 500, or
+    we can't connect, etc.). We raise ValidationError and don't commit the change.
+    """
+    settings.DISABLE_RESOURCE_SERVER_SYNC = False
+
+    with mock.patch(f'{handlers_path}.get_resource_server_client') as get_resource_server_client:
+        get_resource_server_client.return_value.create_resource.side_effect = Exception('Boom!')
+        with impersonate(user):
+            with CaptureQueriesContext(connection) as queries:
+                with pytest.raises(ValidationError, match="Failed to sync resource"):
+                    org = Organization.objects.create(name='Hello')
+
+    # The last two queries should be a rollback
+    assert queries.captured_queries[-2]['sql'].startswith('ROLLBACK'), queries.captured_queries[-2]['sql']
+    assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
+
+
+@pytest.mark.parametrize(
+    'new_settings,should_sync',
+    [
+        ({'DISABLE_RESOURCE_SERVER_SYNC': False, 'RESOURCE_SERVER': {}, 'RESOURCE_SERVICE_PATH': "/foo"}, False),
+        ({'DISABLE_RESOURCE_SERVER_SYNC': False, 'RESOURCE_SERVER': {'url': 'http://localhost:8000'}, 'RESOURCE_SERVICE_PATH': "/foo"}, True),
+        ({'DISABLE_RESOURCE_SERVER_SYNC': True, 'RESOURCE_SERVER': {'url': 'http://localhost:8000'}, 'RESOURCE_SERVICE_PATH': "/foo"}, False),
+        ({'DISABLE_RESOURCE_SERVER_SYNC': True, 'RESOURCE_SERVER': {'url': 'http://localhost:8000'}, 'RESOURCE_SERVICE_PATH': ""}, False),
+    ],
+)
+def test_should_reverse_sync(settings, new_settings, should_sync):
+    """
+    Test that we only reverse sync if we have a resource server and syncing is not disabled.
+    """
+    for key, value in new_settings.items():
+        setattr(settings, key, value)
+
+    assert handlers._should_reverse_sync() == should_sync
