@@ -111,7 +111,7 @@ def sync_to_resource_server(action, instance):
 
         # /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\
         # Do NOT put any early return logic outside of the try/finally, because
-        # we need to reach the end of the function to close the transaction.
+        # we need to reach the end of the function to commit/rollback the transaction.
         # /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\
 
         try:
@@ -124,13 +124,14 @@ def sync_to_resource_server(action, instance):
 
         user = get_current_user()
         if not user:
-            # We shouldn't get here, but we could in theory via CLI commands or such.
+            # TODO: What should we do if there's no user (e.g. CLI app?)
+            # Sync as _system?
             return
 
-        # We might be AnoymousUser, in which case we can't do anything.
         try:
             user_ansible_id = user.resource.ansible_id
         except AttributeError:
+            # TODO: What should we do if we're e.g. AnonymousUser and don't have an ansible_id?
             return
 
         client = get_resource_server_client(
