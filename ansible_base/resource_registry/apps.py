@@ -94,15 +94,7 @@ def proxies_of_model(cls):
 
 
 def connect_resource_signals(sender, **kwargs):
-    from django.conf import settings
-
     from ansible_base.resource_registry.signals import handlers
-
-    should_reverse_sync = not getattr(settings, 'DISABLE_RESOURCE_SERVER_SYNC', False)
-    for setting in ('RESOURCE_SERVER', 'RESOURCE_SERVICE_PATH'):
-        if not getattr(settings, setting, False):
-            should_reverse_sync = False
-            break
 
     for model in handlers.get_resource_models():
         for cls in [model, *proxies_of_model(model)]:
@@ -111,12 +103,13 @@ def connect_resource_signals(sender, **kwargs):
             signals.post_save.connect(handlers.update_resource, sender=cls)
             signals.post_delete.connect(handlers.remove_resource, sender=cls)
 
-            if should_reverse_sync:
-                # Handle sending updates to the resource server (in a transaction) on save
-                signals.pre_save.connect(handlers.sync_to_resource_server_pre_save, sender=cls)
-                signals.post_save.connect(handlers.sync_to_resource_server_post_save, sender=cls)
-                signals.pre_delete.connect(handlers.sync_to_resource_server_pre_delete, sender=cls)
-                signals.post_delete.connect(handlers.sync_to_resource_server_post_delete, sender=cls)
+            # Handle sending updates to the resource server (in a transaction) on save
+            # It's easier to test if we always connect these. We check in the receivers
+            # if we should actually do anything.
+            signals.pre_save.connect(handlers.sync_to_resource_server_pre_save, sender=cls)
+            signals.post_save.connect(handlers.sync_to_resource_server_post_save, sender=cls)
+            signals.pre_delete.connect(handlers.sync_to_resource_server_pre_delete, sender=cls)
+            signals.post_delete.connect(handlers.sync_to_resource_server_post_delete, sender=cls)
 
 
 def disconnect_resource_signals(sender, **kwargs):

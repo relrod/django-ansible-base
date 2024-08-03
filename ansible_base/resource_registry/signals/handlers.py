@@ -14,6 +14,7 @@ from ansible_base.resource_registry.rest_client import ResourceRequestBody, get_
 
 logger = logging.getLogger('ansible_base.resource_registry.signals.handlers')
 
+
 @lru_cache(maxsize=1)
 def get_resource_models():
     resource_models = set()
@@ -42,6 +43,15 @@ def update_resource(sender, instance, created, **kwargs):
         resource.save()
 
 
+def _should_reverse_sync():
+    enabled = not getattr(settings, 'DISABLE_RESOURCE_SERVER_SYNC', False)
+    for setting in ('RESOURCE_SERVER', 'RESOURCE_SERVICE_PATH'):
+        if not getattr(settings, setting, False):
+            enabled = False
+            break
+    return enabled
+
+
 def _ensure_transaction(instance):
     """
     Ensure that the save happens within a transaction, so that when a save
@@ -49,6 +59,8 @@ def _ensure_transaction(instance):
     server from a service. We want to avoid having updates sent when the update
     didn't actually take place locally.
     """
+    if not _should_reverse_sync():
+        return
     instance._transaction = transaction.atomic()
     instance._transaction.__enter__()
 
@@ -90,12 +102,16 @@ def sync_to_resource_server(action, instance):
     """
     Use the resource server API to sync the resource across.
     """
+
+    if not _should_reverse_sync():
+        return
+
     exc = False
     try:
 
         # /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\
-        # Do NOT put anything outside of the try/finally, because we need to
-        # reach the end of the function to close the transaction.
+        # Do NOT put any early return logic outside of the try/finally, because
+        # we need to reach the end of the function to close the transaction.
         # /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\ /!\
 
         try:
@@ -136,11 +152,11 @@ def sync_to_resource_server(action, instance):
             )
 
             if action == 'create':
-                response = client.create_resource(body)
+                client.create_resource(body)
             else:
-                response = client.update_resource(ansible_id, body)
+                client.update_resource(ansible_id, body)
         elif action == 'delete':
-            response = client.delete_resource(ansible_id)
+            client.delete_resource(ansible_id)
     except Exception as e:
         logger.exception("Failed to sync resource to resource server")
 
