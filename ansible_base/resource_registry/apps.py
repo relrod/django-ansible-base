@@ -106,6 +106,7 @@ def _should_reverse_sync():
 
 def connect_resource_signals(sender, **kwargs):
     from ansible_base.resource_registry.signals import handlers
+    from ansible_base.resource_registry.utils.sync_to_resource_server import sync_to_resource_server
 
     for model in handlers.get_resource_models():
         for cls in [model, *proxies_of_model(model)]:
@@ -126,7 +127,7 @@ def connect_resource_signals(sender, **kwargs):
                         # Save so we get an ansible_id if it's a new object
                         _original_save(self, *args, **kwargs)
                         # Send the object to the resource server
-                        handlers.sync_to_resource_server(self, action)
+                        sync_to_resource_server(self, action)
 
                 cls.save = save
 
@@ -137,7 +138,7 @@ def connect_resource_signals(sender, **kwargs):
                 def delete(self, *args, _original_delete=cls._original_delete, **kwargs):
                     with ensure_transaction():
                         _original_delete(self, *args, **kwargs)
-                        handlers.sync_to_resource_server(self, "delete")
+                        sync_to_resource_server(self, "delete")
 
                 cls.delete = delete
 
