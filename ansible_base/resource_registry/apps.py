@@ -2,12 +2,12 @@ import logging
 
 from django.apps import AppConfig
 from django.conf import settings
-from django.db import transaction
 from django.db.models import TextField, signals
 from django.db.models.functions import Cast
 from django.db.utils import IntegrityError
 
 import ansible_base.lib.checks  # noqa: F401 - register checks
+from ansible_base.lib.utils.db import ensure_transaction
 
 logger = logging.getLogger('ansible_base.resource_registry.apps')
 
@@ -120,7 +120,7 @@ def connect_resource_signals(sender, **kwargs):
 
                 # Avoid late binding issues
                 def save(self, *args, _original_save=cls._original_save, **kwargs):
-                    with transaction.atomic():
+                    with ensure_transaction():
                         # We need to know if this is a new object before we save it
                         action = "create" if self._state.adding else "update"
                         # Save so we get an ansible_id if it's a new object
@@ -135,7 +135,7 @@ def connect_resource_signals(sender, **kwargs):
 
                 # Avoid late binding issues
                 def delete(self, *args, _original_delete=cls._original_delete, **kwargs):
-                    with transaction.atomic():
+                    with ensure_transaction():
                         _original_delete(self, *args, **kwargs)
                         handlers.sync_to_resource_server(self, "delete")
 

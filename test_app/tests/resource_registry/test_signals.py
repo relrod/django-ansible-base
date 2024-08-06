@@ -65,7 +65,7 @@ class TestReverseResourceSync:
         settings.DISABLE_RESOURCE_SERVER_SYNC = is_disabled
         apps.connect_resource_signals(sender=None)
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     @pytest.mark.parametrize('action', ['create', 'update', 'delete'])
     def test_sync_to_resource_server_happy_path(self, user, action):
         """
@@ -100,9 +100,8 @@ class TestReverseResourceSync:
         client_method = getattr(get_resource_server_client.return_value, f'{action}_resource')
         client_method.assert_called()
 
-        # The whole thing is wrapped in a transaction/savepoint
-        assert queries.captured_queries[0]['sql'].startswith('SAVEPOINT'), queries.captured_queries[0]['sql']
-        assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
+        # The whole thing is wrapped in a transaction
+        assert queries.captured_queries[-1]['sql'] == 'COMMIT'
 
     @pytest.mark.django_db
     @pytest.mark.parametrize('anon', [AnonymousUser(), None])
@@ -140,7 +139,7 @@ class TestReverseResourceSync:
         # We bail out if we don't have a resource
         get_resource_server_client.assert_not_called()
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     def test_sync_to_resource_server_exception_during_sync(self, user):
         """
         We get an exception when trying to sync (e.g. the server gives us a 500, or
@@ -153,11 +152,9 @@ class TestReverseResourceSync:
                     with pytest.raises(ValidationError, match="Failed to sync resource"):
                         Organization.objects.create(name='Hello')
 
-        # The last two queries should be a rollback
-        assert queries.captured_queries[-2]['sql'].startswith('ROLLBACK'), queries.captured_queries[-2]['sql']
-        assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
+        assert queries.captured_queries[-1]['sql'] == 'ROLLBACK'
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     def test_sync_to_resource_server_exception_during_save(self, user, organization):
         """
         If we get an exception during .save(), the transaction should still roll back
@@ -170,9 +167,7 @@ class TestReverseResourceSync:
                         org = Organization(name=organization.name)
                         org.save()
 
-        # The last two queries should be a rollback
-        assert queries.captured_queries[-2]['sql'].startswith('ROLLBACK'), queries.captured_queries[-2]['sql']
-        assert queries.captured_queries[-1]['sql'].startswith('RELEASE SAVEPOINT'), queries.captured_queries[-1]['sql']
+        assert queries.captured_queries[-1]['sql'] == 'ROLLBACK'
 
     @pytest.mark.parametrize(
         'new_settings,should_sync',
