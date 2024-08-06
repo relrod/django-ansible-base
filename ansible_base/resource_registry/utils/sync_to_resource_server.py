@@ -23,17 +23,16 @@ def sync_to_resource_server(instance, action):
         # The getattr() will raise a Resource.DoesNotExist if the resource doesn't exist.
         return
 
+    user_ansible_id = None
     user = get_current_user()
-    if not user:
-        # TODO: What should we do if there's no user (e.g. CLI app?)
-        # Sync as _system?
-        return
-
-    try:
-        user_ansible_id = user.resource.ansible_id
-    except AttributeError:
-        # TODO: What should we do if we're e.g. AnonymousUser and don't have an ansible_id?
-        return
+    if user:
+        # If we have a user, try to get their ansible_id and sync as them.
+        # If they don't have one some how, or if we don't have a user, sync with None and
+        # let the resource server decide what to do.
+        try:
+            user_ansible_id = user.resource.ansible_id
+        except AttributeError:
+            pass
 
     client = get_resource_server_client(
         settings.RESOURCE_SERVICE_PATH,
