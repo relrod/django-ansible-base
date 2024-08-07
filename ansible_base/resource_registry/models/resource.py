@@ -92,6 +92,7 @@ class Resource(models.Model):
             raise ValidationError({"resource_type": _(f"Resource type: {self.content_type.resource_type.name} cannot be managed by Resources.")})
 
         with transaction.atomic():
+            self.content_object._is_from_resource_server = True  # Don't try to sync it back to the server
             self.content_object.delete()
             self.delete()
 
@@ -107,8 +108,11 @@ class Resource(models.Model):
 
         with transaction.atomic():
             ObjModel = c_type.model_class()
-            content_object = processor(ObjModel()).save(resource_data, is_new=True)
-            resource = cls.objects.get(object_id=content_object.pk, content_type=c_type)
+            content_object = processor(ObjModel())
+            content_object.instance._is_from_resource_server = True  # Don't try to sync it back to the server
+            content_object.save(resource_data, is_new=True)
+            del content_object.instance._is_from_resource_server
+            resource = cls.objects.get(object_id=content_object.instance.pk, content_type=c_type)
 
             if ansible_id:
                 resource.ansible_id = ansible_id
@@ -134,7 +138,10 @@ class Resource(models.Model):
                 self.service_id = service_id
             self.save()
 
-            processor(self.content_object).save(resource_data)
+            content_object = processor(self.content_object)
+            content_object.instance._is_from_resource_server = True  # Don't try to sync it back to the server
+            content_object.save(resource_data)
+            del content_object.instance._is_from_resource_server
 
 
 # This is a separate function so that it can work with models from apps in the

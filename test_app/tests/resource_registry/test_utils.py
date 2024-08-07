@@ -147,6 +147,18 @@ class TestReverseResourceSync:
 
         assert queries.captured_queries[-1]['sql'] == 'ROLLBACK'
 
+    @pytest.mark.django_db(transaction=True)
+    def test_sync_to_resource_server_from_resource_server(self, user, organization, connect_monkeypatch):
+        """
+        If we try to sync a model that came from the resource server, we should bail out.
+        """
+        with connect_monkeypatch():
+            with mock.patch(f'{utils_path}.get_resource_server_client') as get_resource_server_client:
+                organization._is_from_resource_server = True
+                organization.save()
+
+        get_resource_server_client.assert_not_called()
+
     @pytest.mark.parametrize(
         'new_settings,should_sync',
         [

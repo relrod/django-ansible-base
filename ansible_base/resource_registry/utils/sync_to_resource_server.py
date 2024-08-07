@@ -24,6 +24,14 @@ def sync_to_resource_server(instance, action, ansible_id=None):
     object. (For create, the resource is expected to exist before calling this
     function.)
     """
+
+    # This gets set in Resource.create_resource() and friends (and jwt_consumer.common.auth...)
+    is_from_resource_server = getattr(instance, '_is_from_resource_server', False)
+    if is_from_resource_server:
+        # Avoid an infinite loop by not syncing resources that came from the resource server.
+        logger.info(f"Skipping sync of resource {instance}, it appears to have come from the resource server")
+        return
+
     try:
         if action != "delete" and ansible_id is not None:
             raise Exception("ansible_id should not be provided for create/update actions")

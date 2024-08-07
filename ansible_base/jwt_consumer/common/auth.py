@@ -6,6 +6,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
 from django.db.models import Model
 from django.db.utils import IntegrityError
 from rest_framework.authentication import BaseAuthentication
@@ -120,10 +121,15 @@ class JWTCommonAuth:
                 logger.warn(f"New user {self.user.username} created from JWT auth")
             except IntegrityError as exc:
                 logger.warning(f'Existing user {self.token["user_data"]} is a conflict with local user, error: {exc}')
-                self.user, created = get_user_model().objects.update_or_create(
-                    username=self.token["user_data"]['username'],
-                    defaults=user_defaults,
-                )
+
+                with transaction.atomic():
+                    try:
+                        self.user = get_user_model().objects.select_for_update().get(username=self.token["user_data"]['username'])
+                    except get_user_model().DoesNotExist:
+                        self.user = get_user_model()(**user_defaults)
+
+                    self.user._is_from_resource_server = True
+                    self.user.save()
 
         setattr(self.user, "resource_api_actions", self.token.get("resource_api_actions", None))
 
