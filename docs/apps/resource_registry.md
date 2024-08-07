@@ -356,6 +356,9 @@ RESOURCE_SERVER = {
 # Optional
 RESOURCE_JWT_USER_ID = "97447387-8596-404f-b0d0-6429b04c8d22"
 RESOURCE_SERVICE_PATH = "/api/server/v1/service-index/"
+
+# Optional, mainly for tests
+DISABLE_RESOURCE_SERVER_SYNC = False
 ```
 
 > NOTE: Secret key must be generated on the resource server, e.g `generate_service_secret` management command.
@@ -561,3 +564,39 @@ Objects and types:
 - `ManifestItem` - Serializer for resource manifest CSV containing ansible_id and resource_hash
 - `get_resource_type_names` - List str of `shared.{organization,team,user}`
 - `ManifestNotFound` - Custom exception for when manifest is not served
+
+### Reverse-syncing (on-the-fly syncing of local service changes into the resource server)
+
+The above "Configuration" section where `RESOURCE_SERVER` and some other
+variables are defined, is also how reverse-syncing is configured.
+
+Reverse-syncing means syncing resources from the local service into the resource
+service, in realtime (on the fly) as changes are made.
+
+The way this works is by monkeypatching `save()` on models that are shared
+resources (users, orgs, teams). This patching is done in
+`ansible_base.resource_registry.apps`. A reference to the original method is
+also saved so that the monkeypatch can be undone at runtime if needed by calling
+`apps.disconnect_resource_signals()`. At startup time,
+`apps.connect_resource_signals()` is called and that applies the patch along
+with connecting the normal signals described above in earlier sections.
+
+At save-time, we ensure we are in a transaction (creating one if necessary). The
+original `save()` method is also called first, because that allows for the
+`Resource` to get created and for the object to have an `ansible_id` which is
+important for syncing. Then
+`ansible_base.resource_server.utils.sync_to_resource_server.sync_to_resource_server()`
+is called.
+
+At delete time, similar happens - the difference being, we extract the
+`ansible_id`, since it will no longer exist once the object is deleted (which
+also deletes its `Resource`), and we need it so that the resource server knows
+which resource to delete.
+
+The purpose of using a transaction here is so that we can rollback if we are
+unable to sync to the resource server, and so that we don't sync to the resource
+server if an error happens when trying to save to the local service's
+database. However, it's important to note that this is not fail-proof and there
+are cases where we can still sync something to the resource server and end up
+not being able to commit it locally. In this event, the next periodic sync
+should sync the object back down to the service.
