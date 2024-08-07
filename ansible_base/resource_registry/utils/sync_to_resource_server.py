@@ -11,16 +11,31 @@ from ansible_base.resource_registry.rest_client import ResourceRequestBody, get_
 logger = logging.getLogger('ansible_base.resource_registry.utils.sync_to_resource_server')
 
 
-def sync_to_resource_server(instance, action):
+def sync_to_resource_server(instance, action, ansible_id=None):
     """
     Use the resource server API to sync the resource across.
+
+    When action is "delete", the ansible_id is required, because by the time we
+    get here, we've already deleted the object and its resource. So we can't
+    pull the ansible_id from the resource object. It's on the caller to pull
+    the ansible_id from the object before deleting it.
+
+    For all other actions, ansible_id is ignored and retrieved from the resource
+    object. (For create, the resource is expected to exist before calling this
+    function.)
     """
     try:
-        if not getattr(instance, 'resource', None) or not instance.resource.ansible_id:
+        if action != "delete" and ansible_id is not None:
+            raise Exception("ansible_id should not be provided for create/update actions")
+        elif action == "delete" and ansible_id is None:
+            raise Exception("ansible_id should be provided for delete actions")
+        elif not getattr(instance, 'resource', None) or not instance.resource.ansible_id:
             # We can't sync if we don't have a resource and an ansible_id.
+            logger.error(f"Resource {instance} does not have a resource or ansible_id")
             return
     except Resource.DoesNotExist:
         # The getattr() will raise a Resource.DoesNotExist if the resource doesn't exist.
+        logger.error(f"Resource {instance} does not have a resource")
         return
 
     user_ansible_id = None
@@ -32,7 +47,10 @@ def sync_to_resource_server(instance, action):
         try:
             user_ansible_id = user.resource.ansible_id
         except AttributeError:
+            logger.error(f"User {user} does not have a resource")
             pass
+    else:
+        logger.error("No user found, syncing to resource server with jwt_user_id=None")
 
     client = get_resource_server_client(
         settings.RESOURCE_SERVICE_PATH,
@@ -40,7 +58,8 @@ def sync_to_resource_server(instance, action):
         raise_if_bad_request=True,
     )
 
-    ansible_id = instance.resource.ansible_id
+    if action != "delete":
+        ansible_id = instance.resource.ansible_id
 
     resource_type = instance.resource.content_type.resource_type
     data = resource_type.serializer_class(instance).data

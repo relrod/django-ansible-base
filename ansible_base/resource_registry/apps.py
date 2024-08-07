@@ -136,9 +136,10 @@ def connect_resource_signals(sender, **kwargs):
 
                 # Avoid late binding issues
                 def delete(self, *args, _original_delete=cls._original_delete, **kwargs):
+                    object_ansible_id = self.resource.ansible_id
                     with ensure_transaction():
                         _original_delete(self, *args, **kwargs)
-                        sync_to_resource_server(self, "delete")
+                        sync_to_resource_server(self, "delete", ansible_id=object_ansible_id)
 
                 cls.delete = delete
 
