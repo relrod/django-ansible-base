@@ -114,6 +114,7 @@ def connect_resource_signals(sender, **kwargs):
             # so we connect signals for proxies of that model, and not the other way around
             signals.post_save.connect(handlers.update_resource, sender=cls)
             signals.post_delete.connect(handlers.remove_resource, sender=cls)
+            signals.pre_save.connect(handlers.decide_to_sync_update, sender=cls)
 
             if _should_reverse_sync():
                 # Wrap save() in a transaction and sync to resource server
@@ -151,6 +152,7 @@ def disconnect_resource_signals(sender, **kwargs):
         for cls in [model, *proxies_of_model(model)]:
             signals.post_save.disconnect(handlers.update_resource, sender=cls)
             signals.post_delete.disconnect(handlers.remove_resource, sender=cls)
+            signals.pre_save.disconnect(handlers.decide_to_sync_update, sender=cls)
 
             if hasattr(cls, '_original_save'):
                 cls.save = cls._original_save

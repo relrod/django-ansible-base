@@ -1,4 +1,3 @@
-from contextlib import contextmanager
 from unittest import mock
 
 import pytest
@@ -9,38 +8,17 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework.exceptions import ValidationError
 
 from ansible_base.resource_registry import apps
+from ansible_base.resource_registry.utils.sync_to_resource_server import sync_to_resource_server
 from test_app.models import Organization
 
 handlers_path = 'ansible_base.resource_registry.signals.handlers'
 utils_path = 'ansible_base.resource_registry.utils.sync_to_resource_server'
 
 
-@pytest.fixture
-def connect_monkeypatch(settings):
-    @contextmanager
-    def f():
-        # This is kind of a dance. We don't want to break other tests by
-        # leaving the save method monkeypatched when they are expecting syncing
-        # to be disabled. So we patch the save method, yield, reset
-        # DISABLE_RESOURCE_SERVER_SYNC, undo the patch (disconnect_resource_signals),
-        # and then reconnect signals (so the resource registry stuff still works) but
-        # this time we don't monkeypatch the save method since DISABLE_RESOURCE_SERVER_SYNC
-        # is back to its original value.
-        is_disabled = settings.DISABLE_RESOURCE_SERVER_SYNC
-        settings.DISABLE_RESOURCE_SERVER_SYNC = False
-        apps.connect_resource_signals(sender=None)
-        yield
-        apps.disconnect_resource_signals(sender=None)
-        settings.DISABLE_RESOURCE_SERVER_SYNC = is_disabled
-        apps.connect_resource_signals(sender=None)
-
-    return f
-
-
 class TestReverseResourceSync:
     @pytest.mark.django_db(transaction=True)
     @pytest.mark.parametrize('action', ['create', 'update', 'delete'])
-    def test_sync_to_resource_server_happy_path(self, user, action, connect_monkeypatch):
+    def test_sync_to_resource_server_happy_path(self, user, action, enable_reverse_sync):
         """
         We don't have a "real" resource server for test_app to sync against, so we
         mock the client and just check that the right methods are called and ensure
@@ -58,7 +36,7 @@ class TestReverseResourceSync:
             # create it before we start patching and tracking queries
             org = Organization.objects.create(name='Hello')
 
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             with mock.patch(f'{utils_path}.get_resource_server_client') as get_resource_server_client:
                 with impersonate(user):
                     with CaptureQueriesContext(connection) as queries:
@@ -79,12 +57,12 @@ class TestReverseResourceSync:
 
     @pytest.mark.django_db
     @pytest.mark.parametrize('anon', [AnonymousUser(), None])
-    def test_sync_to_resource_server_unauthenticated(self, anon, connect_monkeypatch):
+    def test_sync_to_resource_server_unauthenticated(self, anon, enable_reverse_sync):
         """
         If we don't have a user (e.g. we are a CLI app) or somehow we are here but
         with an anonymous user, we should sync as the system user.
         """
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             with mock.patch(f'{utils_path}.get_resource_server_client') as get_resource_server_client:
                 with impersonate(anon):
                     Organization.objects.create(name='Hello')
@@ -94,12 +72,12 @@ class TestReverseResourceSync:
 
     @pytest.mark.django_db
     @pytest.mark.parametrize('nullify_resource', [pytest.param(True, id="resource is None"), pytest.param(False, id="resource is not None but does not exist")])
-    def test_sync_to_resource_server_no_resource(self, user, nullify_resource, connect_monkeypatch):
+    def test_sync_to_resource_server_no_resource(self, user, nullify_resource, enable_reverse_sync):
         """
         Somehow we are trying to sync a model that doesn't have a resource associated
         with it. This should be a no-op.
         """
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             # Just mock this out so we don't create a resource on the object
             with mock.patch(f'{handlers_path}.init_resource_from_object'):
                 org = Organization(name='Hello')
@@ -116,12 +94,12 @@ class TestReverseResourceSync:
         get_resource_server_client.assert_not_called()
 
     @pytest.mark.django_db(transaction=True)
-    def test_sync_to_resource_server_exception_during_sync(self, user, connect_monkeypatch):
+    def test_sync_to_resource_server_exception_during_sync(self, user, enable_reverse_sync):
         """
         We get an exception when trying to sync (e.g. the server gives us a 500, or
         we can't connect, etc.). We raise ValidationError and don't commit the change.
         """
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             with mock.patch(f'{utils_path}.get_resource_server_client') as get_resource_server_client:
                 get_resource_server_client.return_value.create_resource.side_effect = Exception('Boom!')
                 with impersonate(user):
@@ -132,12 +110,12 @@ class TestReverseResourceSync:
         assert queries.captured_queries[-1]['sql'] == 'ROLLBACK'
 
     @pytest.mark.django_db(transaction=True)
-    def test_sync_to_resource_server_exception_during_save(self, user, organization, connect_monkeypatch):
+    def test_sync_to_resource_server_exception_during_save(self, user, organization, enable_reverse_sync):
         """
         If we get an exception during .save(), the transaction should still roll back
         and nothing should get synced to the resource server.
         """
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             with mock.patch(f'{utils_path}.get_resource_server_client'):
                 with impersonate(user):
                     with CaptureQueriesContext(connection) as queries:
@@ -148,16 +126,37 @@ class TestReverseResourceSync:
         assert queries.captured_queries[-1]['sql'] == 'ROLLBACK'
 
     @pytest.mark.django_db(transaction=True)
-    def test_sync_to_resource_server_from_resource_server(self, user, organization, connect_monkeypatch):
+    def test_sync_to_resource_server_explicit_skip(self, organization, enable_reverse_sync):
         """
-        If we try to sync a model that came from the resource server, we should bail out.
+        If we try to sync a model that has _skip_reverse_resource_sync set, we should bail out.
         """
-        with connect_monkeypatch():
+        with enable_reverse_sync():
             with mock.patch(f'{utils_path}.get_resource_server_client') as get_resource_server_client:
-                organization._is_from_resource_server = True
+                organization._skip_reverse_resource_sync = True
                 organization.save()
 
         get_resource_server_client.assert_not_called()
+
+    @pytest.mark.django_db(transaction=True)
+    def test_sync_to_resource_server_delete_and_no_ansible_id_given(self, organization, enable_reverse_sync):
+        """
+        sync_to_resource_server() always requires an ansible_id kwarg for delete.
+        """
+        with enable_reverse_sync():
+            with pytest.raises(Exception, match="ansible_id should be provided for delete actions"):
+                sync_to_resource_server(organization, 'delete')
+
+    @pytest.mark.django_db(transaction=True)
+    def test_sync_to_resource_server_create_update_and_ansible_id_given(self, organization, enable_reverse_sync):
+        """
+        sync_to_resource_server() should raise an exception if ansible_id is provided for create/update.
+        """
+        with enable_reverse_sync():
+            with pytest.raises(Exception, match="ansible_id should not be provided for create/update actions"):
+                sync_to_resource_server(organization, 'create', ansible_id='foo')
+
+            with pytest.raises(Exception, match="ansible_id should not be provided for create/update actions"):
+                sync_to_resource_server(organization, 'update', ansible_id='foo')
 
     @pytest.mark.parametrize(
         'new_settings,should_sync',

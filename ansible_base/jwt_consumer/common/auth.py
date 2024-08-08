@@ -128,7 +128,7 @@ class JWTCommonAuth:
                     except get_user_model().DoesNotExist:
                         self.user = get_user_model()(**user_defaults)
 
-                    self.user._is_from_resource_server = True
+                    self.user._skip_reverse_resource_sync = True
                     self.user.save()
 
         setattr(self.user, "resource_api_actions", self.token.get("resource_api_actions", None))

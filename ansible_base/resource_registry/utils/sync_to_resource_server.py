@@ -26,10 +26,12 @@ def sync_to_resource_server(instance, action, ansible_id=None):
     """
 
     # This gets set in Resource.create_resource() and friends (and jwt_consumer.common.auth...)
-    is_from_resource_server = getattr(instance, '_is_from_resource_server', False)
-    if is_from_resource_server:
+    # Also from a pre_save hook that checks to see if the object has changed a synced field or not, for updates.
+    skip_sync = getattr(instance, '_skip_reverse_resource_sync', False)
+    if skip_sync:
         # Avoid an infinite loop by not syncing resources that came from the resource server.
-        logger.info(f"Skipping sync of resource {instance}, it appears to have come from the resource server")
+        # Or avoid syncing unnecessarily, when a synced field hasn't changed.
+        logger.info(f"Skipping sync of resource {instance}")
         return
 
     try:
